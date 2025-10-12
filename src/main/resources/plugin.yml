@@ -1,0 +1,23 @@
+name: HandshakeFloodProtection
+main: handshakeguard.HFPMain
+version: "2.0.3"
+api-version: "1.21.4"
+author: Sammyz
+description: "Anti-handshake flood with iptables-first and Bukkit fallback. BY SAMMYZ. Cross-compatibility with netsh for Windows."
+
+depend:
+  - ProtocolLib
+
+softdepend:
+  - PacketEvents
+
+commands:
+  hfp:
+    description: "Handshake Flood Protection commands"
+    usage: /<command> reload
+    aliases: [handshakefp]
+
+permissions:
+  hfp.reload:
+    description: "Reload HFP config"
+    default: op

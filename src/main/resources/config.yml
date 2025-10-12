@@ -1,0 +1,15 @@
+#####################################################
+#####################################################
+#### MADE BY SAMMYZ, DISCORD: anpersonthatperson ####
+#####################################################
+#####################################################
+
+# Max attemps of handshake packets for each ip
+max-attempts: 5
+
+# Interval or something or idk i forgot
+interval-ms: 5000
+
+# You already read this, so u know what to put?
+# uhh if u dont it means how many seconds will it block if the ip got ratelimited
+block-duration-ms: 60000

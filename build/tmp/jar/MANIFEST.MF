@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+Implementation-Title: HandshakeFloodProtection
+Implementation-Version: 2.0.3
+Implementation-Vendor: Sammyz
+
