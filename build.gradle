@@ -1,0 +1,41 @@
+plugins {
+	id 'java'
+}
+
+group = 'com.yes'
+version = '2.0.3'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+repositories {
+	mavenCentral()
+	maven {
+		url = 'https://repo.papermc.io/repository/maven-public/'
+	}
+	flatDir {
+		dirs 'libs'
+	}
+}
+
+dependencies {
+	compileOnly 'io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT'
+	compileOnly name: 'ProtocolLib-5.4.0'
+	compileOnly name: 'packetevents-2.9.5'
+	compileOnly 'io.netty:netty-all:4.2.2.Final'
+}
+
+tasks.jar {
+	archiveBaseName.set('HFProtectionSAMMYZ')
+	archiveVersion.set(project.version.toString())
+	manifest {
+		attributes(
+				'Implementation-Title': 'HandshakeFloodProtection',
+				'Implementation-Version': project.version,
+				'Implementation-Vendor': 'Sammyz'
+		)
+	}
+}
