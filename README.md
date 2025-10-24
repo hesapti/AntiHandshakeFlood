@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Anti Handshake Flood (HFP)** is a high-performance Minecraft plugin developed by **sammyz (Discord: anpersonthatperson)** to mitigate handshake flood attacks — a common vector for Minecraft server DoS attempts.
+**Anti Handshake Flood (HFP)** is a high-performance Minecraft plugin developed by **sammyz (Discord: anpersonthatperson)** to mitigate handshake flood attacks.
 
 It intelligently detects handshake flood patterns using **ProtocolLib** and **PacketEvents**, then dynamically blocks the offending IPs using `iptables` (Linux) or `netsh` (Windows).
 
