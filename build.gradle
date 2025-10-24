@@ -2,8 +2,8 @@ plugins {
 	id 'java'
 }
 
-group = 'com.yes'
-version = '2.0.3'
+group = 'com.handshakeguard'
+version = '2.0.4'
 
 java {
 	toolchain {
