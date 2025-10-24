@@ -6,215 +6,258 @@ package handshakeguard;
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.ProtocolManager;
-import com.comphenix.protocol.PacketType.Handshake.Client;
 import com.comphenix.protocol.events.PacketAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import java.io.IOException;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.TimeUnit;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.util.ReferenceCountUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.InetSocketAddress;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Handshake Flood Protection (HFP)
+ * Optimized, config-driven edition by sammyz/ligmaligmaboy
+ * Version v2.0.4
+ * Discord: anpersonthatperson
+ */
 public class HFPMain extends JavaPlugin {
+
+    private static HFPMain instance;
     private int maxAttempts;
     private long intervalMs;
     private long blockDurationMs;
-    private final Map<String, HFPMain.IPRecord> ipRecords = new ConcurrentHashMap();
-    private final Set<String> blockedIPs = new ConcurrentSkipListSet();
+    private final Map<String, IPRecord> ipRecords = new ConcurrentHashMap<>();
+    private final Set<String> blockedIPs = ConcurrentHashMap.newKeySet();
+    private final Map<String, Set<Channel>> ipToChannels = new ConcurrentHashMap<>();
 
+    public static HFPMain getInstance() { return instance; }
+
+    @Override
     public void onEnable() {
-        this.saveDefaultConfig();
-        this.loadConfigValues();
-        this.getLogger().info("Handshake Flood Protection enabled. Max attempts: " + this.maxAttempts);
-        ProtocolManager pm = ProtocolLibrary.getProtocolManager();
-        pm.addPacketListener(new PacketAdapter(this, new PacketType[]{Client.SET_PROTOCOL}) {
-            public void onPacketReceiving(PacketEvent e) {
-                String ip = HFPMain.this.extractIp(e);
-                if (ip != null && !HFPMain.this.blockedIPs.contains(ip)) {
-                    long now = System.currentTimeMillis();
-                    HFPMain.IPRecord record = (HFPMain.IPRecord)HFPMain.this.ipRecords.computeIfAbsent(ip, (k) -> {
-                        return new HFPMain.IPRecord();
-                    });
-                    record.cleanOld(now, HFPMain.this.intervalMs);
-                    int count = record.addAndGet(now);
-                    if (count >= HFPMain.this.maxAttempts && !HFPMain.this.blockedIPs.contains(ip)) {
-                        HFPMain.this.blockedIPs.add(ip);
-                        HFPMain.this.getLogger().warning("[ALERT] IP " + ip + " blocked for suspected handshake flood. Count: " + count);
-                        boolean blocked = HFPMain.this.tryOSBlock(ip);
-                        if (!blocked) {
-                            HFPMain.this.fallbackKick(e.getPlayer(), ip);
-                        }
+        instance = this;
+        saveDefaultConfig();
+        loadConfigValues();
+        registerHandshakeListener();
+        getLogger().info("§a[HFP] Enabled — maxAttempts=" + maxAttempts + ", interval=" + intervalMs + "ms");
 
-                        Bukkit.getScheduler().runTaskLater(HFPMain.this, () -> {
-                            HFPMain.this.unblockIP(ip);
-                        }, Math.max(1L, HFPMain.this.blockDurationMs / 50L));
-                        record.reset();
-                    }
+        if (isLinux()) runCommandList("iptables.start", "hfp_chain", "0.0.0.0", 3600);
+    }
 
-                } else {
-                    e.setCancelled(true);
-                }
-            }
-        });
+    @Override
+    public void onDisable() {
+        if (isLinux()) runCommandList("iptables.stop", "hfp_chain", "0.0.0.0", 0);
+        getLogger().info("§c[HFP] Disabled.");
     }
 
     private void loadConfigValues() {
-        this.reloadConfig();
-        this.maxAttempts = this.getConfig().getInt("max-attempts", 5);
-        this.intervalMs = this.getConfig().getLong("interval-ms", 5000L);
-        this.blockDurationMs = this.getConfig().getLong("block-duration-ms", 60000L);
+        reloadConfig();
+        maxAttempts = getConfig().getInt("max-attempts", 5);
+        intervalMs = getConfig().getLong("interval-ms", 5000L);
+        blockDurationMs = getConfig().getLong("block-duration-ms", 60000L);
     }
 
-    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (command.getName().equalsIgnoreCase("hfp") && args.length > 0) {
-            if (!sender.isOp()) {
-                sender.sendMessage("§cYou must be an operator to use this command.");
-                return true;
-            }
+    private void registerHandshakeListener() {
+        ProtocolManager pm = ProtocolLibrary.getProtocolManager();
+        pm.addPacketListener(new PacketAdapter(this, PacketType.Handshake.Client.SET_PROTOCOL) {
+            @Override
+            public void onPacketReceiving(PacketEvent e) {
+                String ip = getIp(e);
+                if (ip == null) return;
 
-            if (args[0].equalsIgnoreCase("reload")) {
-                this.loadConfigValues();
-                sender.sendMessage("§aHandshake Flood Protection config reloaded.");
-                this.getLogger().info("Config reloaded via command by " + sender.getName());
-                return true;
-            }
-        }
+                Channel ch = getChannel(e);
+                if (ch != null) ipToChannels.computeIfAbsent(ip, k -> ConcurrentHashMap.newKeySet()).add(ch);
 
-        return false;
+                if (blockedIPs.contains(ip)) {
+                    e.setCancelled(true);
+                    closeChannel(ch);
+                    return;
+                }
+
+                long now = System.currentTimeMillis();
+                IPRecord record = ipRecords.computeIfAbsent(ip, k -> new IPRecord());
+                record.cleanOld(now, intervalMs);
+                int count = record.incrementAndGet();
+
+                if (count >= maxAttempts && blockedIPs.add(ip)) {
+                    e.setCancelled(true);
+                    asyncBlock(ip, e.getPlayer(), count);
+                    record.reset();
+                }
+            }
+        });
+
+        Bukkit.getScheduler().runTaskTimerAsynchronously(this, () -> {
+            long now = System.currentTimeMillis();
+            ipRecords.entrySet().removeIf(e -> e.getValue().isExpired(now, intervalMs));
+        }, 20L * 30, 20L * 30);
     }
 
-    private String extractIp(PacketEvent e) {
+    private void asyncBlock(String ip, Player player, int count) {
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            getLogger().warning("[HFP] Blocking IP " + ip + " (" + count + " attempts)");
+            boolean success = false;
+
+            if (isLinux()) success = runCommandList("iptables.block", "hfp_chain", ip, 600);
+            else if (isWindows()) success = runCommand("netsh advfirewall firewall add rule name=\"HFPBlock_" + ip.replace(".", "_") + "\" dir=in action=block remoteip=" + ip);
+
+            if (!success) success = runCommand("sudo ip route add blackhole " + ip);
+            if (!success) kickIfOnline(player, "§cBlocked by Handshake Flood Protection");
+
+            Bukkit.getScheduler().runTaskLaterAsynchronously(this, () -> unblockIp(ip), blockDurationMs / 50L);
+        });
+    }
+
+    private void unblockIp(String ip) {
         try {
-            if (e.getPlayer() != null && e.getPlayer().getAddress() != null) {
-                return e.getPlayer().getAddress().getAddress().getHostAddress();
+            if (isLinux()) {
+                runCommandList("iptables.stop", "hfp_chain", ip, 0);
+                runCommand("sudo ip route del blackhole " + ip);
+            } else if (isWindows()) {
+                runCommand("netsh advfirewall firewall delete rule name=\"HFPBlock_" + ip.replace(".", "_") + "\"");
             }
-        } catch (Exception var3) {
-        }
+        } catch (Exception ignored) {}
 
+        blockedIPs.remove(ip);
+        Bukkit.broadcastMessage("§a[HFP] Unblocked " + ip);
+    }
+
+    private boolean runCommand(String cmd) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("bash", "-c", cmd);
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            while (reader.ready()) getLogger().info("[HFP-SHELL] " + reader.readLine());
+
+            boolean done = p.waitFor(2, TimeUnit.SECONDS);
+            if (!done) p.destroy();
+            return p.exitValue() == 0;
+        } catch (Exception ex) {
+            handleMissingSudo(ex);
+            return false;
+        }
+    }
+
+    private boolean runCommandList(String path, String chain, String ip, int time) {
+        List<String> cmds = getConfig().getStringList(path);
+        if (cmds == null || cmds.isEmpty()) return false;
+
+        boolean allOk = true;
+        for (String raw : cmds) {
+            String cmd = raw.replace("{chain}", chain)
+                    .replace("{address}", ip)
+                    .replace("{time}", String.valueOf(time));
+            if (!runCommand(cmd)) allOk = false;
+        }
+        return allOk;
+    }
+
+    private void handleMissingSudo(Exception ex) {
+        if (ex.getMessage() != null && ex.getMessage().contains("No such file or directory")) {
+            getLogger().warning("[HFP] Missing sudo or shell, attempting fix...");
+            runCommand("echo $PATH");
+            runCommand("which sudo");
+            runCommand("apt-get update && apt-get install -y sudo");
+        }
+    }
+
+    private String getIp(PacketEvent e) {
+        try {
+            InetSocketAddress addr = e.getPlayer().getAddress();
+            return addr != null ? addr.getAddress().getHostAddress() : null;
+        } catch (Exception ignored) {}
         return null;
     }
 
-    private boolean tryOSBlock(String ip) {
-        String blockCmd;
-        String unblockCmd;
-        if (this.isLinux()) {
-            blockCmd = "sudo iptables -I INPUT -s " + ip + " -j DROP";
-            unblockCmd = "sudo iptables -D INPUT -s " + ip + " -j DROP";
-
-            try {
-                Process p = Runtime.getRuntime().exec(blockCmd);
-                if (!p.waitFor(500L, TimeUnit.MILLISECONDS)) {
-                    p.destroy();
-                    throw new IOException("iptables timeout");
-                }
-
-                if (p.exitValue() == 0) {
-                    this.getLogger().info("[ALERT] iptables block applied for " + ip);
-                    Bukkit.getScheduler().runTaskLater(this, () -> {
-                        try {
-                            Runtime.getRuntime().exec(unblockCmd).waitFor(300L, TimeUnit.MILLISECONDS);
-                        } catch (Exception var4) {
-                            this.getLogger().warning("[ALERT] iptables unblock failed: " + var4.getMessage());
-                        }
-
-                        this.blockedIPs.remove(ip);
-                    }, Math.max(1L, this.blockDurationMs / 50L));
-                    return true;
-                }
-            } catch (Exception var7) {
-                this.getLogger().info("[ALERT] iptables failed for " + ip + ": " + var7.getMessage());
-            }
-        } else if (this.isWindows()) {
-            blockCmd = "HFPBlock_" + ip.replace(".", "_");
-            unblockCmd = "netsh advfirewall firewall add rule name=\"" + blockCmd + "\" dir=in action=block remoteip=" + ip;
-            String unblockCmd = "netsh advfirewall firewall delete rule name=\"" + blockCmd + "\"";
-
-            try {
-                Process p = Runtime.getRuntime().exec(unblockCmd);
-                if (!p.waitFor(1L, TimeUnit.SECONDS)) {
-                    p.destroy();
-                    throw new IOException("netsh timeout");
-                }
-
-                if (p.exitValue() == 0) {
-                    this.getLogger().info("[ALERT] netsh firewall block applied for " + ip);
-                    Bukkit.getScheduler().runTaskLater(this, () -> {
-                        try {
-                            Runtime.getRuntime().exec(unblockCmd).waitFor(500L, TimeUnit.MILLISECONDS);
-                        } catch (Exception var4) {
-                            this.getLogger().warning("[ALERT] netsh unblock failed: " + var4.getMessage());
-                        }
-
-                        this.blockedIPs.remove(ip);
-                    }, Math.max(1L, this.blockDurationMs / 50L));
-                    return true;
-                }
-            } catch (Exception var6) {
-                this.getLogger().info("[ALERT] netsh failed for " + ip + ": " + var6.getMessage());
-            }
-        }
-
-        return false;
-    }
-
-    private void fallbackKick(Player player, String ip) {
+    private Channel getChannel(PacketEvent e) {
         try {
-            if (player != null && player.isOnline()) {
-                player.kickPlayer("Connection blocked temporarily");
+            Object handle = e.getPlayer().getClass().getMethod("getHandle").invoke(e.getPlayer());
+            for (var f : handle.getClass().getDeclaredFields()) {
+                f.setAccessible(true);
+                Object val = f.get(handle);
+                if (val != null && val.getClass().getName().toLowerCase().contains("network")) {
+                    for (var nf : val.getClass().getDeclaredFields()) {
+                        nf.setAccessible(true);
+                        Object possible = nf.get(val);
+                        if (possible instanceof Channel ch) return ch;
+                    }
+                }
             }
-
-            this.getLogger().info("[ALERT] Fallback block applied for " + ip);
-        } catch (Exception var4) {
-            this.getLogger().warning("[ALERT] fallback kick failed for " + ip + ": " + var4.getMessage());
-        }
-
+        } catch (Throwable ignored) {}
+        return null;
     }
 
-    private void unblockIP(String ip) {
-        this.blockedIPs.remove(ip);
-        this.getLogger().info("[ALERT] IP unblocked: " + ip);
+    private void closeChannel(Channel ch) {
+        if (ch != null && ch.isOpen()) ch.close();
     }
 
-    private boolean isLinux() {
-        String os = System.getProperty("os.name", "").toLowerCase();
-        return os.contains("nix") || os.contains("nux") || os.contains("mac");
+    private void kickIfOnline(Player p, String msg) {
+        if (p != null && p.isOnline()) p.kickPlayer(msg);
     }
 
     private boolean isWindows() {
-        String os = System.getProperty("os.name", "").toLowerCase();
-        return os.contains("win");
+        return System.getProperty("os.name").toLowerCase().contains("win");
+    }
+
+    private boolean isLinux() {
+        String os = System.getProperty("os.name").toLowerCase();
+        return os.contains("nux") || os.contains("nix");
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+        if (!cmd.getName().equalsIgnoreCase("hfp")) return false;
+        if (!sender.isOp()) return true;
+
+        if (args.length == 0 || args[0].equalsIgnoreCase("reload")) {
+            loadConfigValues();
+            sender.sendMessage("§a[HFP] Reloaded configuration.");
+            return true;
+        }
+        return false;
     }
 
     private static class IPRecord {
-        private long firstTs = 0L;
-        private int count = 0;
+        private volatile long firstTs = 0;
+        private final AtomicInteger count = new AtomicInteger();
 
-        synchronized int addAndGet(long now) {
-            if (this.count == 0) {
-                this.firstTs = now;
-            }
-
-            ++this.count;
-            return this.count;
+        int incrementAndGet() {
+            if (count.get() == 0) firstTs = System.currentTimeMillis();
+            return count.incrementAndGet();
         }
 
-        synchronized void cleanOld(long now, long window) {
-            if (this.firstTs + window < now) {
-                this.count = 0;
-                this.firstTs = 0L;
-            }
-
+        void cleanOld(long now, long window) {
+            if (firstTs + window < now) reset();
         }
 
-        synchronized void reset() {
-            this.count = 0;
-            this.firstTs = 0L;
+        void reset() {
+            count.set(0);
+            firstTs = 0;
+        }
+
+        boolean isExpired(long now, long window) {
+            return firstTs + window < now && count.get() == 0;
+        }
+    }
+
+    private static class DropHandler extends ChannelInboundHandlerAdapter {
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+            ReferenceCountUtil.release(msg);
+            ctx.close();
         }
     }
 }
+
