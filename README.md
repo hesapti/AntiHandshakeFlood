@@ -1,36 +1,55 @@
-# Anti Handshake Flood
+# 🧱 Anti Handshake Flood (HFP)
 
 ## Overview
 
-This Minecraft plugin, "Anti Handshake Flood," is designed to mitigate handshake floods by blocking Handshake Flood Protections IPs using `netsh` (on Windows) or `iptables` (on Linux) and detecting suspicious packet activity with ProtocolLib and PacketEvents. Developed by sammyz (Discord: anpersonthatperson).
-Keep in mind that this is just a project. 
+**Anti Handshake Flood (HFP)** is a high-performance Minecraft plugin developed by **sammyz (Discord: anpersonthatperson)** to mitigate handshake flood attacks — a common vector for Minecraft server DoS attempts.
 
-## Features
+It intelligently detects handshake flood patterns using **ProtocolLib** and **PacketEvents**, then dynamically blocks the offending IPs using `iptables` (Linux) or `netsh` (Windows).
 
--   **Handshake Flood Mitigation**: Detects and blocks IPs engaging in handshake floods.
--   **Dynamic Blocking**: Uses `netsh` (Windows) or `iptables` (Linux) to block malicious IPs.
--   **Packet Analysis**: Leverages ProtocolLib and PacketEvents for real-time packet inspection.
--   **Configurable Thresholds**: Allows administrators to configure thresholds for triggering flood mitigation.
--   **Lightweight**: Optimized for minimal performance impact on the server.
+This project is experimental but functional and built for **Minecraft 1.21.4+** servers running **Java 21** or later.
 
-## Dependencies
+---
 
--   Java 21 or higher
--   Spigot/Paper server
--   ProtocolLib
--   PacketEvents
--   Minecraft Version 1.21.4
+## ✨ Features
 
-## Installation
+* 🧠 **Intelligent Detection**
+  Detects handshake flood attempts in real time via ProtocolLib and PacketEvents.
 
-1.  Download the latest version of the plugin from [Releases](link-to-releases).
-2.  Place the `HFProtectionSAMMYZ-*.*.*.jar` file into your server's `plugins` directory.
-3.  Install ProtocolLib and PacketEvents by placing their respective `.jar` files into the `plugins` directory.
-4.  Restart the server.
+* 🔒 **Automatic IP Blocking**
 
-## Configuration
+  * Uses `iptables` on **Linux**
+  * Uses `netsh advfirewall` on **Windows**
 
-The plugin's configuration file (`config.yml`) allows you to adjust various parameters:
+* 🧹 **Self-Cleaning Records**
+  Automatically removes inactive IP entries after the configured interval.
+
+* ⚙️ **Configurable Thresholds**
+  Customize detection and block timings through `config.yml`.
+
+* 🪶 **Lightweight & Optimized**
+  Fully asynchronous and designed for minimal performance impact.
+
+* 💬 **In-Game Commands**
+
+  * `/hfp reload` — reloads configuration
+  * Console logging shows detailed block/unblock events
+
+* 💻 **Cross-Platform Shell Integration**
+  Automatically attempts fallback blocking with `ip route blackhole` if `iptables`/`netsh` fail.
+
+---
+
+## 🧩 Dependencies
+
+* **Java 21** or higher
+* **Spigot** / **Paper** server
+* **ProtocolLib**
+* **PacketEvents**
+* **Minecraft 1.21.4+**
+
+---
+
+## ⚙️ Configuration (`config.yml`)
 
 ```yaml
 #####################################################
@@ -39,13 +58,87 @@ The plugin's configuration file (`config.yml`) allows you to adjust various para
 #####################################################
 #####################################################
 
-# Max attemps of handshake packets for each ip
+# Maximum handshake packets allowed per IP within the interval
 max-attempts: 5
 
-# Interval or something or idk i forgot
+# Time window (in milliseconds) to count handshake attempts
 interval-ms: 5000
 
-# You already read this, so u know what to put?
-# uhh if u dont it means how many seconds will it block if the ip got ratelimited
+# How long to block an IP once detected (in milliseconds)
 block-duration-ms: 60000
+
+# Optional: Custom command lists for iptables/netsh integration
+iptables.start:
+  - "sudo iptables -N {chain}"
+  - "sudo iptables -A INPUT -j {chain}"
+
+iptables.block:
+  - "sudo iptables -A {chain} -s {address} -j DROP"
+
+iptables.stop:
+  - "sudo iptables -F {chain}"
+  - "sudo iptables -X {chain}"
 ```
+
+---
+
+## 🚀 Installation
+
+1. **Download** the latest release from [Releases](link-to-releases).
+2. Place `HFProtectionSAMMYZ-*.jar` in your server’s `/plugins` folder.
+3. Install **ProtocolLib** and **PacketEvents** if not already present.
+4. Restart your server.
+5. Configure `config.yml` as needed.
+
+---
+
+## 🧠 How It Works
+
+1. Each incoming **handshake packet** is inspected via ProtocolLib.
+2. The plugin tracks the number of handshake attempts per IP within a time window.
+3. If an IP exceeds the limit:
+
+   * The connection is cancelled immediately.
+   * The IP is **blocked** using:
+
+     * `iptables` on Linux, or
+     * `netsh advfirewall` on Windows.
+4. After the configured **block duration**, the IP is **automatically unblocked**.
+
+---
+
+## 🧰 Commands
+
+| Command       | Description               | Permission |
+| ------------- | ------------------------- | ---------- |
+| `/hfp reload` | Reloads the configuration | `op` only  |
+
+---
+
+## 🪪 Metadata
+
+* **Plugin Name:** Handshake Flood Protection (HFP)
+* **Version:** 2.0.4
+* **Author:** sammyz (Discord: `anpersonthatperson`)
+* **Dependencies:** ProtocolLib, PacketEvents
+* **Platform:** Spigot / Paper
+* **License:** MIT or custom (if applicable)
+
+---
+
+## 🧩 Example Log Output
+
+```
+[HFP] Enabled — maxAttempts=5, interval=5000ms
+[HFP] Blocking IP 192.168.1.15 (12 attempts)
+[HFP] Unblocked 192.168.1.15
+```
+
+---
+
+## ⚠️ Disclaimer
+
+This is a community-driven experimental project.
+Use at your own risk. Always test on a staging server before deploying in production.
+
+---
