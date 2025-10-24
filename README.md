@@ -42,7 +42,7 @@ This project is experimental but functional and built for **Minecraft 1.21.4+** 
 ## 🧩 Dependencies
 
 * **Java 21** or higher
-* **Spigot** / **Paper** server
+* **Spigot** / **Paper** / **Bukkit Based server**
 * **ProtocolLib**
 * **PacketEvents**
 * **Minecraft 1.21.4+**
@@ -88,7 +88,7 @@ iptables.stop:
 2. Place `HFProtectionSAMMYZ-*.jar` in your server’s `/plugins` folder.
 3. Install **ProtocolLib** and **PacketEvents** if not already present.
 4. Restart your server.
-5. Configure `config.yml` as needed.
+5. Configure `config.yml`, since it blocks if u ping the server more than 5x, it is recommended to change it.
 
 ---
 
