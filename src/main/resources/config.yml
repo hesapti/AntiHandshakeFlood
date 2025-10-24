@@ -13,3 +13,16 @@ interval-ms: 5000
 # You already read this, so u know what to put?
 # uhh if u dont it means how many seconds will it block if the ip got ratelimited
 block-duration-ms: 60000
+
+# ADVANCED USERS CONFIGURATION
+iptables:
+  install:
+    - "sudo apt-get install -y iptables ipset"
+  start:
+    - "sudo ipset create {chain} hash:ip timeout {time} maxelem 4294967295"
+    - "sudo iptables -t raw -I PREROUTING -m set --match-set {chain} src -j DROP"
+  stop:
+    - "sudo iptables -t raw -D PREROUTING -m set --match-set {chain} src -j DROP"
+    - "sudo ipset x {chain}"
+  block:
+    - "sudo ipset add {chain} {address}"
